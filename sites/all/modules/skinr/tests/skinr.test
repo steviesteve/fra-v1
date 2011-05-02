@@ -1,0 +1,286 @@
+<?php
+
+/**
+ * @file
+ * Tests for the Skinr module.
+ */
+
+/**
+ * Tests basic module installation.
+ */
+class SkinrInstallationTestCase extends DrupalWebTestCase {
+  protected $profile = 'testing';
+
+  public static function getInfo() {
+    return array(
+      'name' => 'Installation',
+      'description' => 'Tests basic module installation.',
+      'group' => 'Skinr',
+    );
+  }
+
+  function setUp() {
+    parent::setUp();
+  }
+
+  /**
+   * Tests installation and uninstallation of Skinr modules.
+   */
+  function testInstallation() {
+    $this->admin_user = $this->drupalCreateUser(array(
+      'access administration pages',
+      'administer modules',
+      'administer permissions',
+    ));
+    $this->drupalLogin($this->admin_user);
+
+    // Install the modules.
+    $edit = array(
+      'modules[Skinr][skinr][enable]' => TRUE,
+      'modules[Skinr][skinr_ui][enable]' => TRUE,
+    );
+    $this->drupalPost('admin/modules', $edit, t('Save configuration'));
+
+    // Grant permissions.
+    $edit = array(
+      DRUPAL_AUTHENTICATED_RID . '[administer skinr]' => TRUE,
+      DRUPAL_AUTHENTICATED_RID . '[edit skin settings]' => TRUE,
+      DRUPAL_AUTHENTICATED_RID . '[edit advanced skin settings]' => TRUE,
+    );
+    $this->drupalPost('admin/people/permissions', $edit, t('Save permissions'));
+
+    // Verify that we are able to access Skinr's administration pages.
+    $this->drupalGet('admin/appearance/skinr');
+    $this->assertResponse(200);
+
+    // Uninstall the modules.
+    $edit = array(
+      'modules[Skinr][skinr_ui][enable]' => FALSE,
+    );
+    $this->drupalPost('admin/modules', $edit, t('Save configuration'));
+    $edit = array(
+      'modules[Skinr][skinr][enable]' => FALSE,
+    );
+    $this->drupalPost(NULL, $edit, t('Save configuration'));
+    // Uninstall Skinr UI first.
+    $edit = array(
+      'uninstall[skinr_ui]' => TRUE,
+    );
+    $this->drupalPost('admin/modules/uninstall', $edit, t('Uninstall'));
+    $this->drupalPost(NULL, array(), t('Uninstall'));
+    // Now uninstall Skinr.
+    $edit = array(
+      'uninstall[skinr]' => TRUE,
+    );
+    $this->drupalPost('admin/modules/uninstall', $edit, t('Uninstall'));
+    $this->drupalPost(NULL, array(), t('Uninstall'));
+
+    // Verify that no system variables are left.
+    $count = db_query("SELECT 1 FROM {variable} WHERE name LIKE 'skinr_*'")->fetchField();
+    $this->assertEqual($count, 0, t('No variables found.'));
+  }
+}
+
+/**
+ * Tests API functionality.
+ */
+class SkinrApiTestCase extends DrupalWebTestCase {
+  protected $profile = 'testing';
+
+  public static function getInfo() {
+    return array(
+      'name' => 'API',
+      'description' => 'Tests Skinr API functionality.',
+      'group' => 'Skinr',
+    );
+  }
+
+  function setUp() {
+    parent::setUp(array('skinr', 'skinr_test', 'skinr_test_incompatible'));
+    // Enable skinr_test_subtheme, but NOT the basetheme.
+    theme_enable(array('skinr_test_subtheme'));
+  }
+
+  /**
+   * Tests skinr_implements().
+   */
+  function testSkinrImplements() {
+    // Verify that skinr_implements() only returns extensions that are
+    // compatible with this version of Skinr.
+    $extensions = skinr_implements();
+
+    // The expected extensions and their specific properties, if any.
+    $all_expected = array(
+      // Skinr is always expected.
+      'skinr' => array(),
+      // Node is a required core module, so always expected.
+      'node' => array(
+        'version' => VERSION,
+        'path' => drupal_get_path('module', 'skinr') . '/modules',
+      ),
+      // skinr_test has been installed.
+      'skinr_test' => array(
+        'directory' => 'skins',
+      ),
+      'skinr_test_basetheme' => array(
+        'type' => 'theme',
+        'api' => 2,
+        'directory' => 'skins',
+        'base themes' => array(),
+        'sub themes' => drupal_map_assoc(array('skinr_test_subtheme')),
+      ),
+      'skinr_test_subtheme' => array(
+        'type' => 'theme',
+        'api' => 2,
+        'directory' => 'skins',
+        'base themes' => drupal_map_assoc(array('skinr_test_basetheme')),
+        'sub themes' => array(),
+      ),
+    );
+    // When running tests on Skinr code packaged by drupal.org, all 'version'
+    // properties will have the version of the Skinr module. When running on a
+    // repository checkout, the version is NULL (undefined).
+    $skinr_module_info = system_get_info('module', 'skinr');
+    $skinr_module_version = (!empty($skinr_module_info['version']) ? $skinr_module_info['version'] : NULL);
+    foreach ($all_expected as $name => $expected) {
+      // Populate defaults.
+      $expected += array(
+        'type' => 'module',
+        'name' => $name,
+        'version' => $skinr_module_version,
+      );
+      $expected += array(
+        'path' => drupal_get_path($expected['type'], $name),
+        'directory' => NULL,
+      );
+      $this->assertEqual($extensions[$name], $expected, t('%extension implementation found:<pre>@data</pre>', array(
+        '%extension' => $name,
+        '@data' => var_export($extensions[$name], TRUE),
+      )));
+      unset($extensions[$name]);
+    }
+    // Ensure that skinr_test_incompatible is not contained.
+    $this->assertTrue(!isset($extensions['skinr_test_incompatible']), 'Incompatible extension not found.');
+    // After asserting all expected, the list of extensions should be empty.
+    $this->assertTrue(empty($extensions), 'No unexpected extensions found.');
+  }
+
+  /**
+   * Tests hook_skinr_skin_info().
+   */
+  function testSkinrSkinInfo() {
+    // Verify that skinr_get_skin_info() finds and returns all registered skins
+    // in $module.skinr.inc files as well as Skinr plugin files, but does not
+    // return skins that are incompatible with the current Skinr API version.
+    $skin_info = skinr_get_skin_info();
+
+    $path = drupal_get_path('module', 'skinr');
+
+    // skinr_test_font is registered via hook_skinr_skin_info() in
+    // skinr_test.skinr.inc.
+    $this->assertTrue(isset($skin_info['skinr_test_font']), 'Skin registered in $module.skinr.inc found.');
+    $this->assertEqual($skin_info['skinr_test_font']['source']['path'], $path . '/tests', t('Skin path points to module directory: @path', array(
+      '@path' => $skin_info['skinr_test_font']['source']['path'],
+    )));
+    unset($skin_info['skinr_test_font']);
+
+    // skinr_test_example is registered via hook_skinr_skin_PLUGIN_info() in
+    // skins/example.inc.
+    $this->assertTrue(isset($skin_info['skinr_test_example']), 'Skin registered in plugin file found.');
+    $this->assertEqual($skin_info['skinr_test_example']['source']['path'], $path . '/tests/skins/example', t('Skin path points to plugin directory: @path', array(
+      '@path' => $skin_info['skinr_test_example']['source']['path'],
+    )));
+    unset($skin_info['skinr_test_example']);
+
+    // skinr_test_basetheme is registered via hook_skinr_skin_info() in
+    // skinr_test_basetheme.skinr.inc.
+    $this->assertTrue(isset($skin_info['skinr_test_basetheme']), 'Skin registered in $basetheme.skinr.inc found.');
+    $this->assertEqual($skin_info['skinr_test_basetheme']['source']['path'], $path . '/tests/themes/skinr_test_basetheme', t('Skin path points to basetheme directory: @path', array(
+      '@path' => $skin_info['skinr_test_basetheme']['source']['path'],
+    )));
+    $default_theme = variable_get('theme_default', 'bartik');
+    $this->assertEqual($skin_info['skinr_test_basetheme']['status'][$default_theme], 0, 'Basetheme skin is disabled for default theme.');
+    $this->assertEqual($skin_info['skinr_test_basetheme']['status']['skinr_test_basetheme'], 1, 'Basetheme skin is enabled for Skinr test basetheme.');
+    unset($skin_info['skinr_test_basetheme']);
+
+    // skinr_test_subtheme is registered via hook_skinr_skin_info() in
+    // skinr_test_subtheme.skinr.inc.
+    $this->assertTrue(isset($skin_info['skinr_test_subtheme']), 'Skin registered in $subtheme.skinr.inc found.');
+    $this->assertEqual($skin_info['skinr_test_subtheme']['source']['path'], $path . '/tests/themes/skinr_test_subtheme', t('Skin path points to subtheme directory: @path', array(
+      '@path' => $skin_info['skinr_test_subtheme']['source']['path'],
+    )));
+    unset($skin_info['skinr_test_subtheme']);
+
+    // Ensure that skinr_test_incompatible is not contained.
+    $this->assertTrue(!isset($skin_info['skinr_test_incompatible']), 'Incompatible skin not found.');
+    // After asserting all expected, the list of skins should be empty.
+    $this->assertTrue(empty($skin_info), t('No unexpected skins found: <pre>@data</pre>', array(
+      '@data' => var_export($skin_info, TRUE),
+    )));
+  }
+
+
+  /**
+   * Tests hook_skinr_group_info().
+   */
+  function testSkinrGroupInfo() {
+    $group_info = skinr_get_group_info();
+
+    // Verify that default skin groups are found.
+    $all_expected = array(
+      'general' => array(
+        'title' => t('General'),
+        'weight' => -10,
+      ),
+      'box' => array(
+        'title' => t('Box styles'),
+      ),
+      'typography' => array(
+        'title' => t('Typography'),
+      ),
+      'layout' => array(
+        'title' => t('Layout'),
+      ),
+    );
+    foreach ($all_expected as $name => $expected) {
+      // We don't want to be pixel-perfect here.
+      if (isset($group_info[$name]['description'])) {
+        $expected['description'] = $group_info[$name]['description'];
+      }
+      $expected += array(
+        'description' => '',
+        'weight' => 0,
+      );
+      $this->assertEqual($group_info[$name], $expected, t('Group %group found:<pre>@data</pre>', array(
+        '%group' => $name,
+        '@data' => var_export($group_info[$name], TRUE),
+      )));
+      unset($group_info[$name]);
+    }
+    // After asserting all expected, the list of extensions should be empty.
+    $this->assertTrue(empty($group_info), 'No unexpected groups found.');
+  }
+
+  /**
+   * Tests hook_skinr_config_info().
+   */
+  function testSkinrConfigInfo() {
+    // Verify that skinr_get_config_info() finds all existing and compatible
+    // hook_skinr_config_info() implementations.
+    $config = skinr_get_config_info();
+
+    // Skinr's own implementation in skinr.skinr.inc should always be found.
+    $this->assertTrue(isset($config['rules']), 'hook_skinr_config_info() in $module.skinr.inc found.');
+    unset($config['rules']);
+
+    // Skinr's implementation on behalf of Node module in modules/node.skinr.inc
+    // should be found.
+    $this->assertTrue(isset($config['node']), 'hook_skinr_config_info() in a custom path found.');
+    unset($config['node']);
+
+    // Ensure that skinr_test_incompatible is not contained.
+    $this->assertTrue(!isset($config['skinr_test_incompatible']), 'Incompatible hook_skinr_config_info() not found.');
+    // After asserting all expected, the list of skins should be empty.
+    $this->assertTrue(empty($config), 'No unexpected skins found.');
+  }
+}

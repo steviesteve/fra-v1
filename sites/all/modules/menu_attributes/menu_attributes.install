@@ -1,0 +1,45 @@
+<?php
+// $Id: menu_attributes.install,v 1.6 2010/07/24 16:43:19 davereid Exp $
+
+/**
+ * @file
+ * Install, update and uninstall functions for the menu_attributes module.
+ */
+
+/**
+ * Implements hook_install().
+ */
+function menu_attributes_install() {
+  db_update('system')
+    ->fields(array(
+      'weight' => 10,
+    ))
+    ->condition('type', 'module')
+    ->condition('name', 'menu_attributes')
+    ->execute();
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function menu_attributes_uninstall() {
+  drupal_load('module', 'menu_attributes');
+  $attributes = menu_attributes_menu_attribute_info();
+  foreach (array_keys($attributes) as $attribute) {
+    variable_del("menu_attributes_{$attribute}_enable");
+    variable_del("menu_attributes_{$attribute}_default");
+  }
+}
+
+/**
+ * Update the module weight.
+ */
+function menu_attributes_update_1() {
+  db_update('system')
+    ->fields(array(
+      'weight' => 10,
+    ))
+    ->condition('type', 'module')
+    ->condition('name', 'menu_attributes')
+    ->execute();
+}

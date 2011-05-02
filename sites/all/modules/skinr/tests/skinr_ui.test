@@ -1,0 +1,192 @@
+<?php
+
+/**
+ * @file
+ * Tests for the Skinr UI module.
+ */
+
+/**
+ * Base class for Skinr UI tests.
+ */
+class SkinrUITestCase extends DrupalWebTestCase {
+  protected $profile = 'testing';
+
+  function setUp() {
+    parent::setUp(array('block', 'contextual', 'skinr_test', 'skinr_ui'));
+
+    $this->admin_user = $this->drupalCreateUser(array(
+      'administer blocks',
+      'access contextual links',
+      'administer skinr',
+      'edit skin settings',
+      'edit advanced skin settings',
+    ));
+    $this->drupalLogin($this->admin_user);
+
+    // Enable main system block for content region and the user menu block for
+    // the first sidebar.
+    // @see http://drupal.org/node/913086
+    $default_theme = variable_get('theme_default', 'bartik');
+    db_merge('block')
+      ->key(array(
+        'theme' => $default_theme,
+        'module' => 'system',
+        'delta' => 'main',
+      ))
+      ->fields(array(
+        'status' => 1,
+        'region' => 'content',
+        'pages' => '',
+      ))
+      ->execute();
+    db_merge('block')
+      ->key(array(
+        'theme' => $default_theme,
+        'module' => 'system',
+        'delta' => 'user-menu',
+      ))
+      ->fields(array(
+        'status' => 1,
+        'region' => 'sidebar_first',
+        'pages' => '',
+      ))
+      ->execute();
+
+    // Enable Garland and skinr_test_subtheme without enabling its base theme in
+    // order to test subtheme inheritance functionality.
+    theme_enable(array('garland', 'skinr_test_subtheme'));
+  }
+}
+
+/**
+ * Tests UI functionality.
+ */
+class SkinrUIBasicTestCase extends SkinrUITestCase {
+  public static function getInfo() {
+    return array(
+      'name' => 'UI',
+      'description' => 'Tests basic Skinr UI functionality.',
+      'group' => 'Skinr',
+    );
+  }
+
+  /**
+   * Tests basic configuration and applying of a skin.
+   *
+   * @todo For some reason, contextual links are not visible in the debug output
+   *   when running tests; likely a core bug in contextual.js. However, the
+   *   links are contained in the output. Keep this in mind when manually
+   *   reviewing the debug output after running tests!
+   * @todo Remove the overly verbose inline comments after the Skinr development
+   *   team has figured out how to write tests.
+   */
+  function testSkinEdit() {
+    // Go to the front page, on which the user menu block should appear.
+    $this->drupalGet('');
+    // Click the first (index 0) 'Edit skin' link on the page, which should be
+    // the link in the contextual links of the user menu block, since no other
+    // skinnable elements are visible on the page.
+    // For now, this is a simple way to assert and access Skinr links. In the
+    // future, we want to be more explicit in testing; i.e., verify that there
+    // is really only this link, its 'href' is correct, that it appears in the
+    // right location, etc.pp; DrupalWebTestCase ($this) provides many helper
+    // functions to assert such things.
+    $this->clickLink(t('Edit skin'), 0);
+    // Verify that we end up on the expected URL to configure skins for the
+    // user menu block.
+    $front = variable_get('site_frontpage', 'node');
+    $this->assertUrl('admin/appearance/skinr/edit/nojs/block/system-user-menu/configure', array(
+      'query' => array('destination' => $front),
+    ));
+
+    // skinr_test.module got enabled in setUp(), so its skins should be
+    // available.
+    // Verify that we can apply the skinr_test_font skin to the block.
+    $edit = array(
+      'skinr_settings[block_group][bartik][widgets][typography][skinr_test_font]' => 'font_1',
+    );
+    // NULL means that we want to post to the page that is still contained in
+    // SimpleTest's internal browser; i.e., the page of the path above. Instead
+    // of passing NULL, you can also pass a Drupal system path and SimpleTest
+    // will automatically do a $this->drupalGet($path) for you before posting.
+    $this->drupalPost(NULL, $edit, t('Save'));
+
+    // After posting, we expect to be redirected to the originating page, due
+    // to the 'destination' query parameter in the 'Edit skin' link. Since we
+    // came from the front page, Drupal will redirect us to the actual path of
+    // the front page, not ''.
+    // Verify that we were redirected to the originating page.
+    $this->assertUrl($front);
+
+    // Verify that the skin has been applied.
+    // @todo We are going to need this kind of assertion all over again;
+    //   abstract it into a assertSkinrClass() helper method.
+    $elements = $this->xpath('//div[@id=:id]', array(':id' => 'block-system-user-menu'));
+    $class = (string) $elements[0]['class'];
+    $this->assertTrue(strpos($class, ' font-1 '), 'CSS class of configured skin option found.');
+  }
+}
+
+/**
+ * Tests administrative pages functionality.
+ */
+class SkinrUIAdminTestCase extends SkinrUITestCase {
+  public static function getInfo() {
+    return array(
+      'name' => 'Administration',
+      'description' => 'Tests administrative Skinr UI functionality.',
+      'group' => 'Skinr',
+    );
+  }
+
+  function setUp() {
+    parent::setUp(array('skinr_test', 'skinr_ui'));
+
+    $this->admin_user = $this->drupalCreateUser(array(
+      'administer skinr',
+      'edit skin settings',
+      'edit advanced skin settings',
+    ));
+    $this->drupalLogin($this->admin_user);
+
+    // Enable Garland and skinr_test_subtheme without enabling its base theme in
+    // order to test subtheme inheritance functionality.
+    theme_enable(array('garland', 'skinr_test_subtheme'));
+  }
+
+  /**
+   * Tests default status of skins.
+   *
+   * The skinr_test_basetheme skin defined by the skinr_test_basetheme theme
+   * specifies a default status for itself. Its subtheme should inherit the
+   * status of the basetheme.
+   *
+   * @todo Add assertions for 'default status' itself.
+   */
+  function testSkinDefaultStatus() {
+    // Verify that the skin appears on the skin overview page.
+    $this->drupalGet('admin/appearance/skinr/skins');
+    $this->assertLinkByHref('admin/appearance/skinr/skins/settings/skinr_test_basetheme');
+    $this->drupalGet('admin/appearance/skinr/skins/settings/skinr_test_basetheme');
+
+    // Verify that it is enabled for the skinr_test_subtheme, and disabled for
+    // Bartik and Garland by default.
+    $this->assertFieldChecked('edit-skins-skinr-test-subtheme-skinr-test-basetheme-enable', 'skinr_test_basetheme skin is enabled for skinr_test_subtheme.');
+    $this->assertNoFieldChecked('edit-skins-bartik-skinr-test-basetheme-enable', 'skinr_test_basetheme skin is disabled for Bartik.');
+    $this->assertNoFieldChecked('edit-skins-garland-skinr-test-basetheme-enable', 'skinr_test_basetheme skin is disabled for Garland.');
+  }
+
+  /**
+   * Tests skin group functionality.
+   */
+  function testSkinGroups() {
+    $this->drupalGet('admin/appearance/skinr/skins');
+
+    // Verify that the 'General' (default) group appears.
+    $this->assertText(t('General'));
+
+    // Verify that the 'Typography' group appears, since skinr_test module
+    // registers a skin in that group.
+    $this->assertText(t('Typography'));
+  }
+}

@@ -1,0 +1,10 @@
+/* $Id: ie8-fixes.css,v 1.4 2010/11/18 23:43:54 sociotech Exp $ */
+
+/* IE8 fixes
+-------------------------------------------------------------- */
+
+/* grid mask overlay opacity fix
+-------------------------------------------------------------- */
+#grid-mask-overlay {
+  -ms-filter: "progid:DXImageTransform.Microsoft.Alpha(Opacity=75)";
+}
